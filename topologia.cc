@@ -44,13 +44,19 @@ int main(int argc, char *argv[]) {
     YansWifiChannelHelper channel = YansWifiChannelHelper::Default();
     YansWifiPhyHelper phy;
     phy.SetChannel(channel.Create());
+    phy.Set("RxSensitivity", DoubleValue(-90)); // Captura sinais mais fracos
+    phy.Set("CcaEdThreshold", DoubleValue(-85)); // Ajusta detecção de interferência
+
 
     // Configuração do Wi-Fi
     WifiHelper wifi;
-    wifi.SetRemoteStationManager("ns3::ConstantRateWifiManager", 
-                             "DataMode", StringValue("HtMcs1"),
-                             "ControlMode", StringValue("HtMcs0"));
+    wifi.SetStandard(WIFI_STANDARD_80211g);
+    wifi.SetRemoteStationManager("ns3::ConstantRateWifiManager",
+                             "DataMode", StringValue("ErpOfdmRate6Mbps"),
+                             "ControlMode", StringValue("ErpOfdmRate6Mbps"));
 
+
+    
     // Configuração do MAC para os dispositivos Wi-Fi
     WifiMacHelper mac;
     Ssid ssid = Ssid("ns-3-ssid");
@@ -63,35 +69,40 @@ int main(int argc, char *argv[]) {
     // Configuração da rede cabeada (CSMA)
     CsmaHelper csma;
     csma.SetChannelAttribute("DataRate", StringValue("100Mbps")); // Largura de banda do CSMA
-    csma.SetChannelAttribute("Delay", TimeValue(NanoSeconds(6560))); // Atraso de propagação
+    csma.SetChannelAttribute("Delay", TimeValue(MilliSeconds(2))); // Atraso de propagação
     
+
     NetDeviceContainer csmaDevices = csma.Install(csmaNodes);
 
     // Configuração da mobilidade
     MobilityHelper mobility;
     if (enableMobility) {
         mobility.SetMobilityModel("ns3::RandomWalk2dMobilityModel", 
-                                  "Bounds", RectangleValue(Rectangle(-50, 50, -50, 50)),
-                                  "Speed", StringValue("ns3::ConstantRandomVariable[Constant=2]"));
+            "Bounds", RectangleValue(Rectangle(-30, 30, -30, 30)),
+            "Speed", StringValue("ns3::ConstantRandomVariable[Constant=2]"));
         mobility.Install(wifiStaNodes);
+        
     } else {
         // Alocação de posição fixa caso a mobilidade esteja desativada
-        mobility.SetPositionAllocator("ns3::GridPositionAllocator",
-                              "MinX", DoubleValue(0.0),
-                              "MinY", DoubleValue(0.0),
-                              "DeltaX", DoubleValue(10.0),
-                              "DeltaY", DoubleValue(10.0),
-                              "GridWidth", UintegerValue(3),
-                              "LayoutType", StringValue("RowFirst"));
-
+        Ptr<ListPositionAllocator> positionAlloc = CreateObject<ListPositionAllocator>();
+        positionAlloc->Add(Vector(0.0, 0.0, 0.0));  // AP no centro
+        positionAlloc->Add(Vector(5.0, 0.0, 0.0));  // Nó Wi-Fi 1
+        positionAlloc->Add(Vector(10.0, 0.0, 0.0)); // Nó Wi-Fi 2
+        positionAlloc->Add(Vector(15.0, 0.0, 0.0)); // Nó Wi-Fi 3
+        positionAlloc->Add(Vector(20.0, 0.0, 0.0)); // Nó Wi-Fi 4
+        positionAlloc->Add(Vector(25.0, 0.0, 0.0)); // Nó Wi-Fi 5
+        
+        mobility.SetPositionAllocator(positionAlloc);
         mobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
         mobility.Install(wifiStaNodes);
+        
     }
 
     // O AP não se move, então usa modelo de posição constante
     mobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
     mobility.Install(wifiApNode);
 
+    
     // Instala a pilha de protocolos de Internet nos nós
     InternetStackHelper stack;
     stack.Install(wifiStaNodes);
@@ -111,23 +122,39 @@ int main(int argc, char *argv[]) {
     ApplicationContainer apps;
     uint16_t serverPort = 9;
     
-    if (trafficType == "CBR" || trafficType == "CBR_Burst") {
-        OnOffHelper cbrApp("ns3::UdpSocketFactory", InetSocketAddress(csmaInterfaces.GetAddress(1), serverPort));
-        cbrApp.SetAttribute("DataRate", StringValue("10Mbps"));
+    if (trafficType == "CBR") {
+        Ipv4Address serverAddress = csmaInterfaces.GetAddress(1);
+        std::cout << "Servidor configurado com IP: " << serverAddress << std::endl;
+        OnOffHelper cbrApp("ns3::UdpSocketFactory", InetSocketAddress(serverAddress, serverPort));
+
+        cbrApp.SetAttribute("DataRate", StringValue("1.5Mbps"));
         cbrApp.SetAttribute("PacketSize", UintegerValue(4096));
-        cbrApp.SetAttribute("OnTime", StringValue("ns3::ConstantRandomVariable[Constant=1]"));
-        cbrApp.SetAttribute("OffTime", StringValue("ns3::ConstantRandomVariable[Constant=0]"));
+        cbrApp.SetAttribute("OnTime", StringValue("ns3::ExponentialRandomVariable[Mean=0.1]"));
+        cbrApp.SetAttribute("OffTime", StringValue("ns3::ExponentialRandomVariable[Mean=0.1]"));
+
         apps.Add(cbrApp.Install(wifiStaNodes.Get(0)));
     }
 
-    if (trafficType == "Burst" || trafficType == "CBR_Burst") {
+    if (trafficType == "Burst") {
         OnOffHelper burstApp("ns3::UdpSocketFactory", InetSocketAddress(csmaInterfaces.GetAddress(1), serverPort));
-        burstApp.SetAttribute("DataRate", StringValue("10Mbps"));
+        burstApp.SetAttribute("DataRate", StringValue("1.5Mbps"));
         burstApp.SetAttribute("PacketSize", UintegerValue(4096));
-        burstApp.SetAttribute("OnTime", StringValue("ns3::ExponentialRandomVariable[Mean=1]"));
-        burstApp.SetAttribute("OffTime", StringValue("ns3::ExponentialRandomVariable[Mean=1]"));
+        burstApp.SetAttribute("OnTime", StringValue("ns3::ExponentialRandomVariable[Mean=0.1]"));
+        burstApp.SetAttribute("OffTime", StringValue("ns3::ExponentialRandomVariable[Mean=0.1]"));
         apps.Add(burstApp.Install(wifiStaNodes.Get(1)));
     }
+
+    if (trafficType == "CBR_Burst") {
+        OnOffHelper burstApp("ns3::UdpSocketFactory", InetSocketAddress(csmaInterfaces.GetAddress(1), serverPort));
+        burstApp.SetAttribute("DataRate", StringValue("1.5Mbps"));
+        burstApp.SetAttribute("PacketSize", UintegerValue(4096));
+        
+        // Aumenta a duração do tráfego burst
+        burstApp.SetAttribute("OnTime", StringValue("ns3::ExponentialRandomVariable[Mean=0.1]"));
+        burstApp.SetAttribute("OffTime", StringValue("ns3::ExponentialRandomVariable[Mean=0.9]"));
+        apps.Add(burstApp.Install(wifiStaNodes.Get(1)));
+    }
+    
 
     // Adicionando tráfego TCP
     uint16_t tcpPort = 8080;
@@ -143,7 +170,7 @@ int main(int argc, char *argv[]) {
     apps.Add(tcpClient.Install(wifiStaNodes.Get(2))); // Cliente TCP
     
     apps.Start(Seconds(2.0));
-    apps.Stop(Seconds(10.0));
+    apps.Stop(Seconds(100.0));
 
     // Configuração do monitor de fluxo
     FlowMonitorHelper flowMonitor;
@@ -154,7 +181,7 @@ int main(int argc, char *argv[]) {
     Ipv4GlobalRoutingHelper::PopulateRoutingTables();
 
     // Início da simulação
-    Simulator::Stop(Seconds(10.0));
+    Simulator::Stop(Seconds(100.0));
     Simulator::Run();
 
     // Coleta e exibição das estatísticas de fluxo
@@ -168,7 +195,8 @@ int main(int argc, char *argv[]) {
         totalTxPackets += flow.second.txPackets;
         totalRxPackets += flow.second.rxPackets;
         totalLostPackets += (flow.second.txPackets - flow.second.rxPackets);
-        totalThroughput += (flow.second.rxBytes * 8.0) / (8.0 * 1000000);
+        totalThroughput += (flow.second.rxBytes * 8.0) / (1000000.0 * (100.0)); // Mbps
+
         if (flow.second.rxPackets > 0)
             totalDelay += (flow.second.delaySum.GetSeconds() / flow.second.rxPackets);
     }
